@@ -1,0 +1,8 @@
+{
+  "wallet": "",
+  "openai_api_key": "sk-proj",
+  "openai_model": "gpt-4o-mini",
+  "mint_tick": "GPT",
+  "mint_amt": "100",
+  "reg_threads": 3
+}

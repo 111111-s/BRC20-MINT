@@ -1,0 +1,16 @@
+{
+  "name": "moltbook-fleet-monitor",
+  "version": "1.0.0",
+  "description": "Moltbook Fleet Monitor with proxy support",
+  "main": "mint.js",
+  "scripts": {
+    "mint": "node mint.js",
+    "link": "node link.js",
+    "reg": "node reg.js"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.2",
+    "imapflow": "^1.2.9",
+    "impit": "^0.9.1"
+  }
+}
