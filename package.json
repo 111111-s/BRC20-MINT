@@ -1,12 +1,13 @@
 {
-  "name": "moltbook-fleet-monitor",
+  "name": "molt",
   "version": "1.0.0",
-  "description": "Moltbook Fleet Monitor with proxy support",
+  "description": "Moltbook automation toolkit — registration, minting, wallet linking, and token transfers",
   "main": "mint.js",
   "scripts": {
     "mint": "node mint.js",
     "link": "node link.js",
-    "reg": "node reg.js"
+    "reg": "node reg.js",
+    "transfer": "node transfer.js"
   },
   "dependencies": {
     "https-proxy-agent": "^7.0.2",

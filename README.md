@@ -1,210 +1,129 @@
-# MOLT — Moltbook Fleet Manager
+# MOLT — Moltbook Automation Toolkit
 
-Автоматизация регистрации, верификации, привязки кошелька и минта токенов MBC-20 на [Moltbook](https://www.moltbook.com).
+Automated minting, wallet linking, and token transfers for [Moltbook](https://www.moltbook.com) MBC-20 agents.
 
----
+## Features
 
-## Структура проекта
+- **Auto-Mint** — Continuous MBC-20 token minting with per-bot cooldown timers
+- **Wallet Linking** — One-command wallet binding for all claimed agents
+- **Token Transfers** — Interactive console for transferring tokens between agents
+- **Challenge Solving** — Automatic verification via OpenAI (ChatGPT)
+- **Proxy Support** — Full proxy rotation with automatic retry on network errors
+- **Status Persistence** — Bot state saved after each operation, survives crashes
+
+## Project Structure
 
 ```
 MOLT/
-├── mint.js         # Авто-минт токенов (бесконечный цикл)
-├── link.js         # Привязка кошелька ко всем аккаунтам (запуск один раз)
-├── shared.js       # Общий модуль (HTTP, логгирование, ChatGPT, утилиты)
+├── mint.js         Auto-mint tokens (infinite loop)
+├── link.js         Link wallet to all bots (run once)
+├── transfer.js     Transfer tokens between agents
+├── shared.js       Shared utilities (HTTP, logging, API, ChatGPT)
 ├── package.json
 └── data/
-    ├── config.json     # Конфиг (кошелёк, API-ключ OpenAI, модель, параметры минта)
-    ├── accs.txt        # Аккаунты (Name:ApiKey или Name:ApiKey:ClaimURL)
-    ├── proxy.txt       # Прокси (один на строку)
-    ├── twitter.txt     # Twitter-аккаунты для reg.js (LOGIN:PASS:EMAIL:EMAILPASS)
-    ├── dead_twitter.txt# Мёртвые Twitter-аккаунты (заполняется автоматически)
-    └── status.json     # Состояние каждого бота (заполняется автоматически)
+    ├── config.json       Configuration (wallet, OpenAI key, mint params)
+    ├── accs.txt          Bot accounts (Name:APIKey)
+    ├── proxy.txt         Proxy list
+    └── status.json       Bot state persistence (auto-generated)
 ```
 
----
-
-## Установка
+## Installation
 
 ```bash
-cd MOLT
 npm install
 ```
 
-Зависимости:
-- `https-proxy-agent` — поддержка HTTP/HTTPS прокси
-- `imapflow` — чтение почты через IMAP (для автоматической верификации email)
+Dependencies:
+| Package | Purpose |
+|---------|---------|
+| `https-proxy-agent` | HTTP/HTTPS proxy support |
 
----
+## Configuration
 
-## Файлы данных (`data/`)
-
-### `accs.txt` — Аккаунты
-
-Основной файл с аккаунтами. Все скрипты читают ботов отсюда.
-
-```
-# Формат: Имя:API_ключ
-MyBot123:moltbook_sk_abc123def456
-
-# Или с claim URL (добавляется автоматически при регистрации через reg.js):
-MyBot456:moltbook_sk_xyz789:https://moltbook.com/claim/moltbook_claim_xxx
-```
-
-### `proxy.txt` — Прокси
-
-```
-# Формат: ip:port:user:password
-1.2.3.4:8080:username:password
-
-# Или просто ip:port
-1.2.3.4:8080
-
-# Или полный URL
-http://user:pass@1.2.3.4:8080
-```
-
-Прокси распределяются по ботам циклически (бот 1 → прокси 1, бот 2 → прокси 2, ...).
-
-### `config.json` — Основной конфиг
+Edit `data/config.json`:
 
 ```json
 {
-  "wallet": "0xВашКошелёк",
-  "openai_api_key": "sk-proj-xxxxxxxxxxxxxxxx",
+  "wallet": "0xYourWalletAddress",
+  "openai_api_key": "sk-proj-...",
   "openai_model": "gpt-4o-mini",
   "mint_tick": "CLAW",
   "mint_amt": "100"
 }
 ```
 
-| Поле | Описание |
-|------|----------|
-| `wallet` | ERC-20 кошелёк на Base для привязки к ботам и клейма токенов |
-| `openai_api_key` | API-ключ OpenAI для решения верификационных задач |
-| `openai_model` | Модель ChatGPT (по умолчанию `gpt-4o-mini`) |
-| `mint_tick` | Тикер токена для минта (по умолчанию `CLAW`) |
-| `mint_amt` | Количество токенов за один минт (по умолчанию `100`) |
+| Field | Description | Default |
+|-------|-------------|---------|
+| `wallet` | ERC-20 wallet address (Base) for linking | — |
+| `openai_api_key` | OpenAI API key for solving challenges | — |
+| `openai_model` | ChatGPT model | `gpt-4o-mini` |
+| `mint_tick` | Token ticker to mint | `CLAW` |
+| `mint_amt` | Amount per mint | `100` |
 
-Файл создаётся автоматически при первом запуске, если его нет. Если `wallet` или `openai_api_key` пустые — в консоли будет предупреждение.
+## Data Files
 
-## Скрипты
+### `data/accs.txt`
 
-### 1. `link.js` — Привязка кошелька
+```
+BotName:moltbook_sk_apikey
+AnotherBot:moltbook_sk_apikey2
+```
 
-Привязывает ERC-20 кошелёк ко всем claimed аккаунтам. Запускается один раз.
+### `data/proxy.txt`
+
+```
+http://user:pass@host:port
+host:port:user:pass
+host:port
+```
+
+## Usage
+
+### 1. Link Wallet
 
 ```bash
 node link.js
 ```
 
-**Требуемые файлы:** `data/config.json`, `data/accs.txt`, `data/proxy.txt`
+Posts a `link` inscription for each claimed bot. Skips already-linked bots.
 
-**Что делает:**
-1. Для каждого бота проверяет статус (claimed или нет)
-2. Постит link-инскрипцию: `{"p":"mbc-20","op":"link","wallet":"0x..."}`
-3. Решает верификационную задачу через ChatGPT
-4. Сохраняет `wallet_linked: true` в `status.json`
-
-Кошелёк берётся из `data/config.json` (поле `wallet`).
-
----
-
-### 2. `mint.js` — Авто-минт токенов
-
-Бесконечный цикл минта MBC-20 токенов. Каждый бот минтит независимо по собственному таймеру.
+### 2. Auto-Mint
 
 ```bash
 node mint.js
 ```
 
-**Требуемые файлы:** `data/config.json`, `data/accs.txt`, `data/proxy.txt`
+Runs continuously. Each bot mints independently based on its own cooldown (2h 5m). The script checks every 60 seconds and mints any bot whose timer has expired. Status is saved after each bot, so progress is not lost on restart.
 
-**Как работает:**
-- Проверяет всех ботов каждые 60 секунд
-- Каждый бот минтит как только его кулдаун истекает (2 часа 5 минут)
-- Не ждёт остальных ботов — каждый минтит независимо
-- При минте постит: `{"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}`
-- Решает верификационную задачу через ChatGPT
-- Обрабатывает rate-limit (429) и автоматически ставит таймер на retry
-- Время последнего минта сохраняется в `status.json`
+### 3. Transfer Tokens
 
-**Тихий режим:** когда все боты на кулдауне, в консоли показывается одна строка с обратным отсчётом до ближайшего минта.
-
----
-
-## Верификационные задачи
-
-При каждом посте на Moltbook требуется решить обфусцированную математическую задачу. Пример:
-
-```
-A] lO b-StEr'S ~ClAw^ ExErTs/ twEnTy ThReE {nEwToNs} aNd| aN oThEr Lo.o.bStEr ~AdDs/ sEvEn nEwToNs, hOw- mUcH <CoMbInEd> fOrCe?
+```bash
+node transfer.js
 ```
 
-Деобфускация → `a lobster s claw exerts twenty three newtons and an other lobster adds seven newtons how much combined force`
+Interactive console: select sender, enter recipient, token ticker, and amount.
 
-Ответ: `30.00`
+## How Verification Works
 
-Решение выполняется автоматически через ChatGPT API (`gpt-4o-mini`). Ответ должен быть числом с двумя десятичными знаками.
-
----
-
-## Порядок использования
+Every Moltbook post requires solving an obfuscated math challenge:
 
 ```
-1. Настроить конфиг:
-   data/config.json     — кошелёк + ключ OpenAI + параметры минта
-
-2. Подготовить файлы данных:
-   data/proxy.txt       — прокси
-   data/twitter.txt     — Twitter-аккаунты LOGIN:PASS:EMAIL:EMAILPASS (для reg.js)
-
-3. Зарегистрировать аккаунты:
-   node reg.js 10
-
-4. Привязать кошелёк:
-   node link.js
-
-5. Запустить авто-минт:
-   node mint.js
+A] lO b-StEr'S ~ClAw^ ExErTs/ twEnTy ThReE {nEwToNs}...
 ```
 
----
+The script deobfuscates the text (removes special chars, collapses duplicate letters, strips filler words) and sends it to ChatGPT, which returns the numeric answer (e.g. `30.00`). Invalid answers are automatically retried.
 
-## Лимиты Moltbook
+## Proxy Rotation
 
-| Действие | Новые аккаунты (< 24ч) | Обычные аккаунты |
-|----------|------------------------|------------------|
-| Посты | 1 раз в 2 часа | 1 раз в 30 минут |
-| Комментарии | 60 сек кулдаун, 20/день | 20 сек кулдаун, 50/день |
-| DM | Заблокировано | Разрешено |
-| Создание submolt | 1 всего | 1 в час |
+All API requests use proxies from `data/proxy.txt`. On network errors (socket hang up, aborted, timeout), the request is retried up to 2 times with a **different proxy** each attempt.
 
----
+## Rate Limits
 
-## Переменные окружения (опционально)
+| Action | New accounts (< 24h) | Regular accounts |
+|--------|---------------------|-----------------|
+| Posts | 1 per 2 hours | 1 per 30 minutes |
+| Comments | 60s cooldown, 20/day | 20s cooldown, 50/day |
 
-Все настройки задаются в `data/config.json`. Переменные окружения — только как фоллбэк:
+## License
 
-| Переменная | Описание | Приоритет |
-|------------|----------|-----------|
-| `OPENAI_API_KEY` | Ключ OpenAI | config.json > env |
-| `OPENAI_MODEL` | Модель ChatGPT | config.json > env > `gpt-4o-mini` |
-
----
-
-## Логи
-
-Все скрипты выводят подробные логи с временными метками:
-
-```
-[2026-02-09 14:30:01] [MyBot123] Minting tokens...
-[2026-02-09 14:30:01] [MyBot123] Payload: {"p":"mbc-20","op":"mint","tick":"CLAW","amt":"100"}
-[2026-02-09 14:30:02] [MyBot123] MINT POST status: 201
-[2026-02-09 14:30:02] [MyBot123] ✅ Mint post created!
-[2026-02-09 14:30:02] [MyBot123] Verification required! Expires: 2026-02-09T14:30:32Z
-[2026-02-09 14:30:02] [MyBot123/MINT-VERIFY] Solving challenge via ChatGPT (gpt-4o-mini)...
-[2026-02-09 14:30:03] [MyBot123/MINT-VERIFY] ✅ ChatGPT answer: 30.00
-[2026-02-09 14:30:03] [MyBot123/MINT-VERIFY] ✅ Verification successful!
-```
-#   M B C - 2 0 - S O F T  
- 
+MIT
