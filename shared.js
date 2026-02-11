@@ -405,15 +405,22 @@ async function verifyPost(apiKey, code, challenge, proxyIdx, tag, maxRetries = 2
 
 // ─── Challenge solver (OpenAI) ───────────────────────────────────────────────
 
+/** Light clean for log output: lowercase, collapse repeats, remove fillers */
 function deobfuscate(text) {
-  // 1. Remove all decorative/special characters, keep alphanumeric + basic punctuation
-  let clean = text.replace(/[^a-zA-Z0-9\s.,?!]/g, " ");
-  // 2. Normalize whitespace
+  let clean = text.replace(/[^a-zA-Z0-9\s]/g, " ");
   clean = clean.replace(/\s+/g, " ").toLowerCase().trim();
-  // 3. Collapse repeated letters: "loooobssterr" → "lobster", "newwtons" → "newtons"
   clean = clean.replace(/([a-z])\1+/g, "$1");
-  // 4. Remove filler words (only "um"/"umm" — the actual obfuscation fillers)
-  clean = clean.replace(/\b(um+)\b/g, "").replace(/\s+/g, " ").trim();
+  clean = clean.replace(/\b(um+|uh+)\b/g, "").replace(/\s+/g, " ").trim();
+  return clean;
+}
+
+/** Clean for GPT: strip junk chars but KEEP original case (helps GPT identify word boundaries) */
+function cleanForGPT(text) {
+  // Strip ALL non-letter/digit/space chars first (removes . , ! ? ' etc mixed into words)
+  let clean = text.replace(/[^a-zA-Z0-9\s]/g, " ");
+  clean = clean.replace(/\s+/g, " ").trim();
+  // Remove filler words (case-insensitive): "Um", "Uh"
+  clean = clean.replace(/\b[Uu][Mm]+\b/g, "").replace(/\b[Uu][Hh]+\b/g, "").replace(/\s+/g, " ").trim();
   return clean;
 }
 
@@ -433,35 +440,42 @@ function parseAnswer(raw) {
 }
 
 const GPT_SYSTEM_PROMPT = [
-  "You are a precise math solver. You receive obfuscated text about lobsters that contains a math word problem.",
+  "You solve math word problems hidden in obfuscated text about lobsters.",
   "",
-  "DECODING: The text has random caps, duplicate letters, and special chars. Examples:",
-  "  'LoOoObSsStErR' = 'lobster', 'ThIrTy TwO' = 'thirty two' = 32, 'FoUrTeEn' = 'fourteen' = 14",
-  "  'nEwWwToNs' = 'newtons', 'PrEsSuUrE' = 'pressure'",
+  "The text has these obfuscations (ignore them and read through):",
+  "- RaNdOm CaPiTaLiZaTiOn (read normally)",
+  "- Duplicate letters: 'lOoObSsStErR' = 'lobster', 'NeeWwToNs' = 'newtons'",
+  "- Words split into fragments: 'tW eN tY sEv En' = 'twenty seven' = 27",
+  "- Filler words like 'Um' (skip them)",
   "",
   "NUMBER WORDS: one=1, two=2, three=3, four=4, five=5, six=6, seven=7, eight=8, nine=9, ten=10,",
-  "  eleven=11, twelve=12, thirteen=13, fourteen=14, fifteen=15, sixteen=16, seventeen=17, eighteen=18, nineteen=19,",
-  "  twenty=20, thirty=30, forty=40, fifty=50, sixty=60, seventy=70, eighty=80, ninety=90, hundred=100",
-  "  Compounds: 'twenty five' = 25, 'thirty two' = 32, 'forty seven' = 47",
+  "eleven=11, twelve=12, thirteen=13, fourteen=14, fifteen=15, sixteen=16, seventeen=17,",
+  "eighteen=18, nineteen=19, twenty=20, thirty=30, forty=40, fifty=50, sixty=60,",
+  "seventy=70, eighty=80, ninety=90, hundred=100",
+  "Compounds: 'twenty five'=25, 'thirty two'=32, 'forty seven'=47",
   "",
-  "OPERATIONS:",
-  "  'total/combined/sum/together' → ADD",
-  "  'loses/decreases/less/minus/difference' → SUBTRACT",
-  "  'times/multiplied/product' → MULTIPLY",
-  "  'divided/split/per/each/equally among' → DIVIDE",
-  "  'percent/percentage' → use % formula",
+  "Think step by step:",
+  "1. First, decode the obfuscated text into plain English",
+  "2. Find ALL numbers mentioned in the problem",
+  "3. Identify what operation to perform (add, subtract, multiply, divide)",
+  "4. Calculate the answer",
+  "5. On the LAST line, write ONLY the final answer as a number with 2 decimal places",
   "",
-  "RESPOND with ONLY the final numeric answer, exactly 2 decimal places. Example: 47.00",
-  "NO words, NO units, NO explanation. JUST the number."
+  "Your LAST line must be ONLY the number like: 47.00"
 ].join("\n");
 
 async function solveChallengeWithGPT(challenge, tag) {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY not set! Set it in data/config.json.");
 
-  const clean = deobfuscate(challenge);
+  // Clean version with CASE preserved — helps GPT see word boundaries
+  const cleaned = cleanForGPT(challenge);
 
-  // Try up to 2 times if answer format is invalid
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Try up to 3 times if answer format is invalid
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const userMsg = attempt === 0
+      ? `Decode the obfuscated text, solve the math step by step, then write ONLY the final answer (2 decimal places) on the last line.\n\n${cleaned}`
+      : `Previous answer was wrong. Try again: decode carefully, find ALL numbers, identify the correct operation, compute step by step. Last line = ONLY the number.\n\n${cleaned}`;
+
     const resp = await httpRequest({
       url: "https://api.openai.com/v1/chat/completions",
       method: "POST",
@@ -470,28 +484,32 @@ async function solveChallengeWithGPT(challenge, tag) {
         model: OPENAI_MODEL,
         messages: [
           { role: "system", content: GPT_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: attempt === 0
-              ? `Solve this math problem. Reply with ONLY the number (2 decimal places).\n\nOriginal: ${challenge}\n\nDecoded: ${clean}`
-              : `The previous answer was not a valid number. Try again. Solve this math problem and reply with ONLY a number like 47.00\n\nOriginal: ${challenge}\n\nDecoded: ${clean}`
-          }
+          { role: "user", content: userMsg }
         ],
-        max_tokens: 30,
-        temperature: attempt * 0.3 // slightly higher temp on retry for variety
+        max_tokens: 300,
+        temperature: attempt * 0.3
       }
     });
 
     const raw = resp.json?.choices?.[0]?.message?.content;
     if (!raw) throw new Error(`GPT returned no answer: ${JSON.stringify(resp.json || resp.body?.slice(0, 200))}`);
 
-    const answer = parseAnswer(raw);
+    // Extract answer from the last line of GPT's reasoning
+    const lines = raw.trim().split("\n").filter(l => l.trim());
+    const lastLine = lines[lines.length - 1];
+    const answer = parseAnswer(lastLine) || parseAnswer(raw);
+
+    if (tag && lines.length > 1) {
+      // Log the reasoning (first line only) for debugging
+      log(tag, `GPT reasoning: ${lines[0].slice(0, 80)}...`);
+    }
+
     if (answer) return answer;
 
-    if (tag) log(tag, `\u26A0 GPT returned invalid format: "${raw.trim()}", retrying...`);
+    if (tag) log(tag, `\u26A0 GPT returned invalid format: "${lastLine?.trim()}", retrying...`);
   }
 
-  throw new Error("GPT could not produce a valid numeric answer after 2 attempts");
+  throw new Error("GPT could not produce a valid numeric answer after 3 attempts");
 }
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
@@ -510,5 +528,5 @@ module.exports = {
   httpRequest, mergeCookies, withRetry, getProxy,
 
   checkClaimStatus, createPost, verifyPost,
-  deobfuscate, solveChallengeWithGPT
+  deobfuscate, cleanForGPT, solveChallengeWithGPT
 };
